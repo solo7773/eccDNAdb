@@ -1,0 +1,54 @@
+#!/usr/bin/bash
+
+#PBS -N anaana
+#PBS -e /data/home/pengli_data/analyze
+#PBS -o /data/home/pengli_data/analyze
+#PBS -l nodes=1:ppn=40
+
+cd $PBS_O_WORKDIR
+
+#conda activate py2dna # not working
+mypath=/share/home/pengli/miniconda3/envs/py2dna/bin
+aahome=/data/home/pengli_data/aa/AmpliconArchitect
+
+datasource="/data/home/pengli_data/PRJNA338012"
+
+rm log.log
+echo `nproc` >> log.log
+for f in ${datasource}/*; do
+  if [[ -d $f ]]; then
+    fqs=($(ls $f))
+    r1=${f}/${fqs[0]}
+    r2=${f}/${fqs[1]}
+    echo $r1 >> log.log
+    echo $r2 >> log.log
+    srr=$(basename $f)
+    mkdir $srr
+    bwa mem -t `nproc` /data/home/pengli_data/aa/data_repo/hg19/bwaidx/hg19full.fa $r1 $r2 > ${srr}/${srr}.bwa.sam 2>${srr}/bwa.log
+    ${mypath}/picard SortSam I=${srr}/${srr}.bwa.sam O=${srr}/${srr}.bwa.sam.sorted.bam SORT_ORDER=coordinate > ${srr}/picard.log 2>&1
+    samtools index -@ `nproc` ${srr}/${srr}.bwa.sam.sorted.bam ${srr}/${srr}.bwa.sam.sorted.bam.bai > ${srr}/samtools.log 2>&1
+    bedtools bamtobed -i ${srr}/${srr}.bwa.sam.sorted.bam > ${srr}/${srr}.bwa.sam.sorted.bam.bed 2>${srr}/bedtools.log
+    ### read depth
+    mkdir -p ${srr}/rd/reads ${srr}/rd/output
+    cd ${srr}/rd/reads
+    awk '{outname=$1; gsub("chr", "", outname); print $0 > outname".bed"}' <../../${srr}.bwa.sam.sorted.bam.bed
+    cd $PBS_O_WORKDIR
+    cp -r /data/home/pengli_data/aa/usereaddepth/annotations ${srr}/rd/
+    readLen=`awk 'NR==2{print length}' < $r1`
+    fdr=0.05
+    printf "readLength\t${readLen}\nfdr\t${fdr}\noverDispersion\t1\ngcWindowSize\t100\npercCNGain\t0.05\npercCNLoss\t0.05\nchunkSize\t1e7\nverbose\tTRUE\n" > ${srr}/rd/params
+    printf "setwd('$(pwd)/${srr}/rd')\nlibrary(readDepth)\nrdo = new('rdObject')\nrdo = readDepth(rdo)\nrdo.mapCor = rd.mapCorrect(rdo, minMapability=0.75)\nrdo.mapCor.gcCor = rd.gcCorrect(rdo.mapCor)\nsegs = rd.cnSegments(rdo.mapCor.gcCor, rmGaps=FALSE)\nsegs = segs[segs\$chrom != 'X' & segs\$chrom != 'Y', ]\nsegs\$chrom = paste0('chr', segs\$chrom)\nwriteSegs(segs)\nwriteAlts(segs,rdo)\nwriteThresholds(rdo)\n#save.image('output/mysave.Rdata')\nsetwd('$(pwd)')\ncat('Done readDepth\\\n', file='log.log', append=TRUE)\n" > ${srr}/rd/run_readDepth.R
+    export R_LIBS_USER="/share/home/pengli/soft/yes/lib/R/library"
+    /share/home/pengli/soft/yes/bin/Rscript --vanilla ${srr}/rd/run_readDepth.R > ${srr}/rd/rscript.log 2>&1
+    ### aa
+    ${mypath}/python ${aahome}/src/amplified_intervals.py --bed ${srr}/rd/output/alts.dat --out ${srr}/${srr}.readdepth.seedinterval --bam ${srr}/${srr}.bwa.sam.sorted.bam > ${srr}/amp_interval.log 2>&1
+    mkdir ${srr}/aaout
+    ${mypath}/python ${aahome}/src/AmpliconArchitect.py --bam ${srr}/${srr}.bwa.sam.sorted.bam --bed ${srr}/${srr}.readdepth.seedinterval.bed --out ${srr}/aaout/${srr} > ${srr}/aa.log 2>&1
+    ### move on
+    echo "----- Next -----" >> log.log
+  fi
+  #break
+done
+
+echo Done >> log.log
+

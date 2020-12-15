@@ -2,7 +2,7 @@ import pandas as pd, os, glob, plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from multiprocessing import Pool
 
-eccdnafile = 'eccdna_app_db/webdata/eccdnas_3_ana_out.txt'
+eccdnafile = 'eccdnas_3_ana_out.txt'
 eccdnaGenefile = 'eccdna_gene_4_ana_out.txt'
 geneExpFiles = glob.glob(
     'webdata/gene_exp/*')
